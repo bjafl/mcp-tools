@@ -1,2 +1,14 @@
+[project]
+name = "mcp-tools"
+version = "0.1.0"
+description = "MCP server collection"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp-fetch-select",
+]
+
+[tool.uv.sources]
+mcp-fetch-select = { workspace = true }
+
 [tool.uv.workspace]
 members = ["packages/*"]
