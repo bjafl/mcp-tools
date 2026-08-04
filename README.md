@@ -102,17 +102,26 @@ beyond localhost.
 Both servers make outbound HTTP requests (to fetch the target page). To route those through a
 web proxy — e.g. a [tinyproxy](https://tinyproxy.github.io/) instance — set:
 
-| Env var | Purpose |
-|---|---|
-| `MCP_PROXY_URL` | Proxy endpoint, e.g. `http://tinyproxy-host:8888` |
-| `MCP_PROXY_USERNAME` | Optional Basic auth username for the proxy |
-| `MCP_PROXY_PASSWORD` | Optional Basic auth password for the proxy |
+| Env var | CLI flag | Purpose |
+|---|---|---|
+| `MCP_PROXY_URL` | `--proxy-url` | Proxy endpoint, e.g. `http://tinyproxy-host:8888` |
+| `MCP_PROXY_USERNAME` | `--proxy-username` | Optional Basic auth username for the proxy |
+| `MCP_PROXY_PASSWORD` | `--proxy-password` | Optional Basic auth password for the proxy |
+
+Each CLI flag takes precedence over its env var, independently per field — e.g. you can set
+`MCP_PROXY_URL`/`MCP_PROXY_USERNAME` via env and override just `--proxy-password` for a single
+run.
 
 ```bash
 MCP_PROXY_URL="http://tinyproxy-host:8888" \
 MCP_PROXY_USERNAME="myuser" \
 MCP_PROXY_PASSWORD="mypass" \
 uv --directory packages/mcp-fetch-select run mcp-fetch-select
+```
+
+```bash
+uv --directory packages/mcp-fetch-select run mcp-fetch-select \
+  --proxy-url "http://tinyproxy-host:8888" --proxy-username myuser --proxy-password mypass
 ```
 
 Or copy the package's `.env.example` to `.env` and run with:
@@ -129,6 +138,23 @@ server's *own* env — when a client spawns the server as a stdio subprocess (as
 examples above), these variables must be listed in that client's `env` config, since stdio
 clients only forward a small safe-list of variables (not the whole parent environment) to the
 child process by default.
+
+### Falling back to a direct request
+
+If the proxy itself doesn't respond (connection refused, DNS failure, or a timeout reaching the
+proxy), set `MCP_PROXY_FALLBACK=1` or pass `--proxy-fallback` to retry the request directly
+instead of failing the tool call. Either the env var or the flag enables it; there's no need to
+set both.
+
+```bash
+uv --directory packages/mcp-fetch-select run mcp-fetch-select --proxy-fallback
+```
+
+A real HTTP error response from the target site relayed through a working proxy (e.g. a 404) is
+not treated as a proxy failure and does not trigger the fallback. When a fallback does happen,
+the tool's response text is prefixed with a note (`> Note: the proxy did not respond; this
+request was sent directly (no proxy).`) so the calling agent is aware the request bypassed the
+proxy.
 
 ---
 
