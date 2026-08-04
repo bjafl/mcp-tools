@@ -2,12 +2,17 @@
 
 A monorepo of MCP (Model Context Protocol) tools, each runnable directly via `uvx --from git+...`.
 
+## Requirements
+
+- Python 3.12+ (uv will download a matching interpreter automatically if you don't have one)
+- [uv](https://docs.astral.sh/uv/)
+
 ## Packages
 
 | Package | Description |
 |---|---|
 | [mcp-fetch-select](packages/mcp-fetch-select/) | Fetch a URL and return elements matching a CSS selector |
-| [mcp-recipe-scraper](packages/mcp-recipe-scraper/) | Scrape structured recipe data (title, ingredients, instructions, nutrients) from a recipe URL |
+| [mcp-recipe-scraper](packages/mcp-recipe-scraper/) | Scrape structured recipe data (title, ingredients, instructions, nutrients, yields) from a recipe URL |
 
 ---
 
@@ -22,13 +27,16 @@ Each package can be wired up individually. Example for `mcp-fetch-select`:
   "command": "uvx",
   "args": [
     "--from",
-    "git+https://github.com/YOUR_USER/mcp-tools#subdirectory=packages/mcp-fetch-select",
+    "git+https://github.com/bjafl/mcp-tools#subdirectory=packages/mcp-fetch-select",
     "mcp-fetch-select"
   ]
 }
 ```
 
-### Private repo (with `GITHUB_TOKEN`)
+### Private fork (with `GITHUB_TOKEN`)
+
+If you've forked this repo privately, authenticate with a token instead (replace `YOUR_USER`
+with your fork's owner):
 
 ```json
 {
@@ -60,7 +68,7 @@ Test with the MCP inspector:
 
 ```bash
 npx @modelcontextprotocol/inspector uvx \
-  --from "git+https://github.com/YOUR_USER/mcp-tools#subdirectory=packages/mcp-fetch-select" \
+  --from "git+https://github.com/bjafl/mcp-tools#subdirectory=packages/mcp-fetch-select" \
   mcp-fetch-select
 ```
 
@@ -107,9 +115,14 @@ MCP_PROXY_PASSWORD="mypass" \
 uv --directory packages/mcp-fetch-select run mcp-fetch-select
 ```
 
-Or copy the package's `.env.example` to `.env` and run with `uv run --env-file .env
-mcp-fetch-select` — `uv run` only loads a `.env` file when `--env-file` (or `UV_ENV_FILE`) is
-given, it isn't picked up automatically.
+Or copy the package's `.env.example` to `.env` and run with:
+
+```bash
+uv --directory packages/mcp-fetch-select run --env-file .env mcp-fetch-select
+```
+
+`uv run` only loads a `.env` file when `--env-file` (or `UV_ENV_FILE`) is given — it isn't
+picked up automatically.
 
 When unset, requests go out directly — no proxy is used. Note that this only affects the
 server's *own* env — when a client spawns the server as a stdio subprocess (as in the MetaMCP
@@ -121,8 +134,17 @@ child process by default.
 
 ## Adding a new package
 
-1. Create `packages/<your-package>/` with a standalone `pyproject.toml` and `src/` layout.
+1. Create `packages/<your-package>/` with a standalone `pyproject.toml` (using the `uv_build`
+   backend, matching the existing packages) and `src/` layout.
 2. Add an entry point under `[project.scripts]` in `pyproject.toml`.
-3. Add a row to the table above in this README.
+3. Optionally register it in the root `pyproject.toml`'s `dependencies` and
+   `[tool.uv.sources]` so `uv sync` at the repo root installs it into the shared workspace
+   environment too. This isn't required for the package to work standalone — see below.
+4. Add a row to the table above in this README.
 
-Each package is fully self-contained — no workspace-level `pyproject.toml` — so `uvx --from git+...#subdirectory=` works independently for each one.
+The root `pyproject.toml` declares a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/)
+(`[tool.uv.workspace]`) spanning `packages/*`, which is what lets `uv sync`/`uv run` at the repo
+root manage both packages together. Each package's own `pyproject.toml` is still a complete,
+independent project — its dependencies don't reference the workspace — so `uvx --from
+git+...#subdirectory=packages/<name>` keeps working standalone, without needing the rest of the
+repo or the root `pyproject.toml`.
