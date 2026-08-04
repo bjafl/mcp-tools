@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from typing import Annotated
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -27,6 +28,9 @@ TIMEOUT = 20.0
 
 
 PROXY: str | None = None
+PROXY_FALLBACK = False
+PROXY_FALLBACK_TIMEOUT = 10.0
+NOTE_PROXY_FALLBACK = "> Note: the proxy did not respond; this request was sent directly (no proxy)."
 
 
 def _resolve_proxy_config(
@@ -57,6 +61,33 @@ def _build_proxy_url(url: str, username: str | None, password: str | None) -> st
     return urlunsplit((parts.scheme, f"{userinfo}@{netloc}", parts.path, parts.query, parts.fragment))
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _fetch(url: str) -> tuple[httpx.Response, bool]:
+    """GET url, honoring PROXY/PROXY_FALLBACK. Returns (response, used_fallback)."""
+    if PROXY and PROXY_FALLBACK:
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True, timeout=PROXY_FALLBACK_TIMEOUT, proxy=PROXY
+            ) as client:
+                response = await client.get(url, headers=HEADERS)
+                response.raise_for_status()
+                return response, False
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.ProxyError):
+            print(f"proxy did not respond, falling back to a direct request for {url}", file=sys.stderr)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT) as client:
+                response = await client.get(url, headers=HEADERS)
+                response.raise_for_status()
+                return response, True
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT, proxy=PROXY) as client:
+        response = await client.get(url, headers=HEADERS)
+        response.raise_for_status()
+        return response, False
+
+
 @app.tool(description="Fetch a URL and return elements matching a CSS selector")
 async def fetch_select(
     url: Annotated[str, Field(description="URL to fetch")],
@@ -64,9 +95,8 @@ async def fetch_select(
     raw_html: Annotated[bool, Field(description="Return raw HTML instead of extracted text")] = False,
     multiple: Annotated[bool, Field(description="If false, return only the first match")] = True,
 ) -> str:
-    async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT, proxy=PROXY) as client:
-        response = await client.get(url, headers=HEADERS)
-        response.raise_for_status()
+    response, used_fallback = await _fetch(url)
+    prefix = f"{NOTE_PROXY_FALLBACK}\n\n" if used_fallback else ""
 
     soup = BeautifulSoup(response.text, "lxml")
 
@@ -77,7 +107,7 @@ async def fetch_select(
         matches = [match] if match else []
 
     if not matches:
-        return f"No matches found for selector '{selector}' on {url}"
+        return f"{prefix}No matches found for selector '{selector}' on {url}"
 
     parts = [f"# {len(matches)} match(es) for '{selector}' on {url}"]
     for el in matches:
@@ -86,7 +116,7 @@ async def fetch_select(
         else:
             parts.append(el.get_text(separator="\n", strip=True))
 
-    return "\n\n---\n\n".join(parts)
+    return prefix + "\n\n---\n\n".join(parts)
 
 
 def main() -> None:
@@ -115,10 +145,16 @@ def main() -> None:
         default=None,
         help="Basic auth password for the proxy (overrides MCP_PROXY_PASSWORD)",
     )
+    parser.add_argument(
+        "--proxy-fallback",
+        action="store_true",
+        help="Fall back to a direct request if the proxy doesn't respond (or set MCP_PROXY_FALLBACK)",
+    )
     args = parser.parse_args()
 
-    global PROXY
+    global PROXY, PROXY_FALLBACK
     PROXY = _resolve_proxy_config(args.proxy_url, args.proxy_username, args.proxy_password)
+    PROXY_FALLBACK = args.proxy_fallback or _env_flag("MCP_PROXY_FALLBACK")
 
     if args.transport == "streamable-http":
         app.run(transport="streamable-http", host=args.host, port=args.port, streamable_http_path=args.path)
