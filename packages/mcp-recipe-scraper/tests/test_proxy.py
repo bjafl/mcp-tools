@@ -1,4 +1,10 @@
-from mcp_recipe_scraper.__main__ import _build_proxy_url, _resolve_proxy_config
+import asyncio
+
+import httpx
+import pytest
+
+import mcp_recipe_scraper.__main__ as main_mod
+from mcp_recipe_scraper.__main__ import _build_proxy_url, _resolve_proxy_config, _env_flag, _fetch, scrape_recipe
 
 
 def test_resolve_proxy_config_cli_wins_over_env(monkeypatch):
@@ -47,3 +53,132 @@ def test_build_proxy_url_with_username_and_password():
     result = _build_proxy_url("http://proxy:8888", "user", "pass")
 
     assert result == "http://user:pass@proxy:8888"
+
+
+def test_env_flag_true_values(monkeypatch):
+    for value in ("1", "true", "True", "yes", "on"):
+        monkeypatch.setenv("MCP_PROXY_FALLBACK", value)
+        assert _env_flag("MCP_PROXY_FALLBACK") is True
+
+
+def test_env_flag_false_when_unset(monkeypatch):
+    monkeypatch.delenv("MCP_PROXY_FALLBACK", raising=False)
+    assert _env_flag("MCP_PROXY_FALLBACK") is False
+
+
+class _FakeAsyncClient:
+    """Records the proxy it was constructed with and delegates .get() to a callback."""
+
+    def __init__(self, get_impl, follow_redirects=True, timeout=None, proxy=None):
+        self.proxy = proxy
+        self._get_impl = get_impl
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def get(self, url, headers=None):
+        return await self._get_impl(self.proxy, url)
+
+
+def test_fetch_uses_proxy_when_fallback_disabled(monkeypatch):
+    monkeypatch.setattr(main_mod, "PROXY", "http://proxy:8888")
+    monkeypatch.setattr(main_mod, "PROXY_FALLBACK", False)
+    seen_proxies = []
+
+    async def get_impl(proxy, url):
+        seen_proxies.append(proxy)
+        return httpx.Response(200, request=httpx.Request("GET", url), text="ok")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(get_impl, **kw))
+
+    response, used_fallback = asyncio.run(_fetch("http://example.com"))
+
+    assert used_fallback is False
+    assert response.text == "ok"
+    assert seen_proxies == ["http://proxy:8888"]
+
+
+def test_fetch_falls_back_on_connect_error(monkeypatch):
+    monkeypatch.setattr(main_mod, "PROXY", "http://proxy:8888")
+    monkeypatch.setattr(main_mod, "PROXY_FALLBACK", True)
+    seen_proxies = []
+
+    async def get_impl(proxy, url):
+        seen_proxies.append(proxy)
+        if proxy:
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", url))
+        return httpx.Response(200, request=httpx.Request("GET", url), text="direct ok")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(get_impl, **kw))
+
+    response, used_fallback = asyncio.run(_fetch("http://example.com"))
+
+    assert used_fallback is True
+    assert response.text == "direct ok"
+    assert seen_proxies == ["http://proxy:8888", None]
+
+
+def test_fetch_does_not_fall_back_on_http_status_error(monkeypatch):
+    monkeypatch.setattr(main_mod, "PROXY", "http://proxy:8888")
+    monkeypatch.setattr(main_mod, "PROXY_FALLBACK", True)
+    call_count = 0
+
+    async def get_impl(proxy, url):
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(404, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(get_impl, **kw))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(_fetch("http://example.com"))
+
+    assert call_count == 1
+
+
+class _FakeScraper:
+    def title(self):
+        return "Test Recipe"
+
+    def yields(self):
+        return "4 servings"
+
+    def ingredients(self):
+        return ["a", "b"]
+
+    def instructions(self):
+        return "Do it"
+
+    def nutrients(self):
+        return {"calories": "100"}
+
+    def to_json(self):
+        return {"title": "Test Recipe"}
+
+
+def test_scrape_recipe_prepends_note_when_fallback_used(monkeypatch):
+    async def fake_fetch(url):
+        return httpx.Response(200, request=httpx.Request("GET", url), text="<html></html>"), True
+
+    monkeypatch.setattr(main_mod, "_fetch", fake_fetch)
+    monkeypatch.setattr(main_mod, "scrape_html", lambda html, org_url, supported_only: _FakeScraper())
+
+    result = asyncio.run(scrape_recipe(url="http://example.com", supported_only=False))
+
+    assert result.startswith("> Note: the proxy did not respond")
+    assert "Test Recipe" in result
+
+
+def test_scrape_recipe_no_note_without_fallback(monkeypatch):
+    async def fake_fetch(url):
+        return httpx.Response(200, request=httpx.Request("GET", url), text="<html></html>"), False
+
+    monkeypatch.setattr(main_mod, "_fetch", fake_fetch)
+    monkeypatch.setattr(main_mod, "scrape_html", lambda html, org_url, supported_only: _FakeScraper())
+
+    result = asyncio.run(scrape_recipe(url="http://example.com", supported_only=False))
+
+    assert not result.startswith("> Note:")
