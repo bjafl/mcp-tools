@@ -26,20 +26,26 @@ HEADERS = {
 TIMEOUT = 20.0
 
 
-def _proxy_url() -> str | None:
-    """Build a proxy URL for outbound requests from MCP_PROXY_* env vars.
+PROXY: str | None = None
 
-    MCP_PROXY_URL is the proxy endpoint (e.g. a tinyproxy instance), and
-    MCP_PROXY_USERNAME/MCP_PROXY_PASSWORD supply Basic auth for it if needed.
-    """
-    url = os.environ.get("MCP_PROXY_URL")
+
+def _resolve_proxy_config(
+    cli_url: str | None, cli_username: str | None, cli_password: str | None
+) -> str | None:
+    """Merge CLI proxy args with MCP_PROXY_* env vars, CLI winning per field."""
+    url = cli_url if cli_url is not None else os.environ.get("MCP_PROXY_URL")
     if not url:
         return None
-    username = os.environ.get("MCP_PROXY_USERNAME")
+    username = cli_username if cli_username is not None else os.environ.get("MCP_PROXY_USERNAME")
+    password = cli_password if cli_password is not None else os.environ.get("MCP_PROXY_PASSWORD")
+    return _build_proxy_url(url, username, password)
+
+
+def _build_proxy_url(url: str, username: str | None, password: str | None) -> str:
+    """Embed Basic auth userinfo into a proxy URL, if a username is given."""
     if not username:
         return url
 
-    password = os.environ.get("MCP_PROXY_PASSWORD", "")
     userinfo = quote(username, safe="")
     if password:
         userinfo += f":{quote(password, safe='')}"
@@ -49,9 +55,6 @@ def _proxy_url() -> str | None:
     if parts.port:
         netloc += f":{parts.port}"
     return urlunsplit((parts.scheme, f"{userinfo}@{netloc}", parts.path, parts.query, parts.fragment))
-
-
-PROXY = _proxy_url()
 
 
 @app.tool(description="Fetch a URL and return elements matching a CSS selector")
@@ -97,7 +100,25 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (streamable-http only)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind (streamable-http only)")
     parser.add_argument("--path", default="/mcp", help="HTTP path for the MCP endpoint (streamable-http only)")
+    parser.add_argument(
+        "--proxy-url",
+        default=None,
+        help="Proxy endpoint for outbound requests, e.g. http://tinyproxy-host:8888 (overrides MCP_PROXY_URL)",
+    )
+    parser.add_argument(
+        "--proxy-username",
+        default=None,
+        help="Basic auth username for the proxy (overrides MCP_PROXY_USERNAME)",
+    )
+    parser.add_argument(
+        "--proxy-password",
+        default=None,
+        help="Basic auth password for the proxy (overrides MCP_PROXY_PASSWORD)",
+    )
     args = parser.parse_args()
+
+    global PROXY
+    PROXY = _resolve_proxy_config(args.proxy_url, args.proxy_username, args.proxy_password)
 
     if args.transport == "streamable-http":
         app.run(transport="streamable-http", host=args.host, port=args.port, streamable_http_path=args.path)
