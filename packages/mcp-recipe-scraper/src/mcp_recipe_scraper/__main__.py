@@ -1,62 +1,75 @@
+import argparse
 import asyncio
 import json
-from typing import Any
+import os
+from typing import Annotated
+from urllib.parse import quote, urlsplit, urlunsplit
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
-from recipe_scrapers import scrape_html, scrape_me
+import httpx
+from mcp.server.mcpserver import MCPServer
+from pydantic import Field
+from recipe_scrapers import scrape_html
 
-app = Server("mcp-recipe-scraper")
+app = MCPServer("mcp-recipe-scraper")
+
+HEADERS = {"User-Agent": "mcp-recipe-scraper/0.1"}
+TIMEOUT = 20.0
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="scrape_recipe",
+def _proxy_url() -> str | None:
+    """Build a proxy URL for outbound requests from MCP_PROXY_* env vars.
+
+    MCP_PROXY_URL is the proxy endpoint (e.g. a tinyproxy instance), and
+    MCP_PROXY_USERNAME/MCP_PROXY_PASSWORD supply Basic auth for it if needed.
+    """
+    url = os.environ.get("MCP_PROXY_URL")
+    if not url:
+        return None
+    username = os.environ.get("MCP_PROXY_USERNAME")
+    if not username:
+        return url
+
+    password = os.environ.get("MCP_PROXY_PASSWORD", "")
+    userinfo = quote(username, safe="")
+    if password:
+        userinfo += f":{quote(password, safe='')}"
+
+    parts = urlsplit(url)
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, f"{userinfo}@{netloc}", parts.path, parts.query, parts.fragment))
+
+
+PROXY = _proxy_url()
+
+
+@app.tool(
+    description=(
+        "Scrape structured recipe data (title, ingredients, instructions, "
+        "nutrients, yields) from a recipe URL."
+    )
+)
+async def scrape_recipe(
+    url: Annotated[str, Field(description="URL of the recipe page to scrape")],
+    supported_only: Annotated[
+        bool,
+        Field(
             description=(
-                "Scrape structured recipe data (title, ingredients, instructions, "
-                "nutrients, yields) from a recipe URL."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL of the recipe page to scrape",
-                    },
-                    "supported_only": {
-                        "type": "boolean",
-                        "description": (
-                            "If true, only scrape sites with dedicated scrapers. "
-                            "If false, fall back to generic scraping for unknown sites."
-                        ),
-                        "default": False,
-                    },
-                },
-                "required": ["url"],
-            },
-        )
-    ]
-
-
-@app.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    if name != "scrape_recipe":
-        raise ValueError(f"Unknown tool: {name}")
-
-    url: str = arguments["url"]
-    supported_only: bool = arguments.get("supported_only", False)
+                "If true, only scrape sites with dedicated scrapers. "
+                "If false, fall back to generic scraping for unknown sites."
+            )
+        ),
+    ] = False,
+) -> str:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT, proxy=PROXY) as client:
+        response = await client.get(url, headers=HEADERS)
+        response.raise_for_status()
+    html = response.text
 
     scraper = await asyncio.get_event_loop().run_in_executor(
         None,
-        lambda: scrape_html(
-            html=None,
-            org_url=url,
-            online=True,
-            supported_only=supported_only,
-        ),
+        lambda: scrape_html(html=html, org_url=url, supported_only=supported_only),
     )
 
     data = scraper.to_json()
@@ -85,7 +98,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     lines += ["## Raw JSON", "```json", json.dumps(data, indent=2, ensure_ascii=False), "```"]
 
-    return [TextContent(type="text", text="\n".join(lines))]
+    return "\n".join(lines)
 
 
 def _safe(fn):
@@ -95,13 +108,23 @@ def _safe(fn):
         return None
 
 
-async def _run() -> None:
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
-
-
 def main() -> None:
-    asyncio.run(_run())
+    parser = argparse.ArgumentParser(prog="mcp-recipe-scraper")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="MCP transport to serve over (default: stdio)",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind (streamable-http only)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind (streamable-http only)")
+    parser.add_argument("--path", default="/mcp", help="HTTP path for the MCP endpoint (streamable-http only)")
+    args = parser.parse_args()
+
+    if args.transport == "streamable-http":
+        app.run(transport="streamable-http", host=args.host, port=args.port, streamable_http_path=args.path)
+    else:
+        app.run()
 
 
 if __name__ == "__main__":

@@ -1,63 +1,55 @@
-import asyncio
-from typing import Any
+import argparse
+import os
+from typing import Annotated
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from bs4 import BeautifulSoup
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
-app = Server("mcp-fetch-select")
+app = MCPServer("mcp-fetch-select")
 
 HEADERS = {"User-Agent": "mcp-fetch-select/0.1"}
 TIMEOUT = 20.0
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="fetch_select",
-            description="Fetch a URL and return elements matching a CSS selector",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch",
-                    },
-                    "selector": {
-                        "type": "string",
-                        "description": "CSS selector, e.g. .article-body, #main, h2.title",
-                    },
-                    "raw_html": {
-                        "type": "boolean",
-                        "description": "Return raw HTML instead of extracted text",
-                        "default": False,
-                    },
-                    "multiple": {
-                        "type": "boolean",
-                        "description": "If false, return only the first match",
-                        "default": True,
-                    },
-                },
-                "required": ["url", "selector"],
-            },
-        )
-    ]
+def _proxy_url() -> str | None:
+    """Build a proxy URL for outbound requests from MCP_PROXY_* env vars.
+
+    MCP_PROXY_URL is the proxy endpoint (e.g. a tinyproxy instance), and
+    MCP_PROXY_USERNAME/MCP_PROXY_PASSWORD supply Basic auth for it if needed.
+    """
+    url = os.environ.get("MCP_PROXY_URL")
+    if not url:
+        return None
+    username = os.environ.get("MCP_PROXY_USERNAME")
+    if not username:
+        return url
+
+    password = os.environ.get("MCP_PROXY_PASSWORD", "")
+    userinfo = quote(username, safe="")
+    if password:
+        userinfo += f":{quote(password, safe='')}"
+
+    parts = urlsplit(url)
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, f"{userinfo}@{netloc}", parts.path, parts.query, parts.fragment))
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    if name != "fetch_select":
-        raise ValueError(f"Unknown tool: {name}")
+PROXY = _proxy_url()
 
-    url: str = arguments["url"]
-    selector: str = arguments["selector"]
-    raw_html: bool = arguments.get("raw_html", False)
-    multiple: bool = arguments.get("multiple", True)
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT) as client:
+@app.tool(description="Fetch a URL and return elements matching a CSS selector")
+async def fetch_select(
+    url: Annotated[str, Field(description="URL to fetch")],
+    selector: Annotated[str, Field(description="CSS selector, e.g. .article-body, #main, h2.title")],
+    raw_html: Annotated[bool, Field(description="Return raw HTML instead of extracted text")] = False,
+    multiple: Annotated[bool, Field(description="If false, return only the first match")] = True,
+) -> str:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT, proxy=PROXY) as client:
         response = await client.get(url, headers=HEADERS)
         response.raise_for_status()
 
@@ -70,7 +62,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         matches = [match] if match else []
 
     if not matches:
-        return [TextContent(type="text", text=f"No matches found for selector '{selector}' on {url}")]
+        return f"No matches found for selector '{selector}' on {url}"
 
     parts = [f"# {len(matches)} match(es) for '{selector}' on {url}"]
     for el in matches:
@@ -79,16 +71,26 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         else:
             parts.append(el.get_text(separator="\n", strip=True))
 
-    return [TextContent(type="text", text="\n\n---\n\n".join(parts))]
-
-
-async def _run() -> None:
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    return "\n\n---\n\n".join(parts)
 
 
 def main() -> None:
-    asyncio.run(_run())
+    parser = argparse.ArgumentParser(prog="mcp-fetch-select")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="MCP transport to serve over (default: stdio)",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind (streamable-http only)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind (streamable-http only)")
+    parser.add_argument("--path", default="/mcp", help="HTTP path for the MCP endpoint (streamable-http only)")
+    args = parser.parse_args()
+
+    if args.transport == "streamable-http":
+        app.run(transport="streamable-http", host=args.host, port=args.port, streamable_http_path=args.path)
+    else:
+        app.run()
 
 
 if __name__ == "__main__":

@@ -73,6 +73,48 @@ npx @modelcontextprotocol/inspector \
 
 ---
 
+## Transports
+
+Each server defaults to stdio (as used by the MetaMCP examples above). Pass `--transport
+streamable-http` to serve over the modern MCP Streamable HTTP transport instead:
+
+```bash
+uv --directory packages/mcp-fetch-select run mcp-fetch-select \
+  --transport streamable-http --host 127.0.0.1 --port 8000 --path /mcp
+```
+
+The server is then reachable at `http://127.0.0.1:8000/mcp`. `--host`/`--port`/`--path` are
+ignored in stdio mode. `--host` defaults to `127.0.0.1`; pass `--host 0.0.0.0` to expose it
+beyond localhost.
+
+---
+
+## Proxying outbound requests
+
+Both servers make outbound HTTP requests (to fetch the target page). To route those through a
+web proxy — e.g. a [tinyproxy](https://tinyproxy.github.io/) instance — set:
+
+| Env var | Purpose |
+|---|---|
+| `MCP_PROXY_URL` | Proxy endpoint, e.g. `http://tinyproxy-host:8888` |
+| `MCP_PROXY_USERNAME` | Optional Basic auth username for the proxy |
+| `MCP_PROXY_PASSWORD` | Optional Basic auth password for the proxy |
+
+```bash
+MCP_PROXY_URL="http://tinyproxy-host:8888" \
+MCP_PROXY_USERNAME="myuser" \
+MCP_PROXY_PASSWORD="mypass" \
+uv --directory packages/mcp-fetch-select run mcp-fetch-select
+```
+
+When unset, requests go out directly — no proxy is used. Note that this only affects the
+server's *own* env — when a client spawns the server as a stdio subprocess (as in the MetaMCP
+examples above), these variables must be listed in that client's `env` config, since stdio
+clients only forward a small safe-list of variables (not the whole parent environment) to the
+child process by default.
+
+---
+
 ## Adding a new package
 
 1. Create `packages/<your-package>/` with a standalone `pyproject.toml` and `src/` layout.
