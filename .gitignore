@@ -19,6 +19,10 @@ env/
 .uv/
 uv.lock
 
+# env files (never commit real secrets; keep .env.example tracked)
+.env
+.env.local
+
 # mypy
 .mypy_cache/
 

@@ -107,6 +107,10 @@ MCP_PROXY_PASSWORD="mypass" \
 uv --directory packages/mcp-fetch-select run mcp-fetch-select
 ```
 
+Or copy the package's `.env.example` to `.env` and run with `uv run --env-file .env
+mcp-fetch-select` — `uv run` only loads a `.env` file when `--env-file` (or `UV_ENV_FILE`) is
+given, it isn't picked up automatically.
+
 When unset, requests go out directly — no proxy is used. Note that this only affects the
 server's *own* env — when a client spawns the server as a stdio subprocess (as in the MetaMCP
 examples above), these variables must be listed in that client's `env` config, since stdio
