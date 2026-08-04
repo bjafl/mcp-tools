@@ -13,3 +13,6 @@ mcp-recipe-scraper = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/*"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"

@@ -72,12 +72,14 @@ async def _fetch(url: str) -> tuple[httpx.Response, bool]:
     if PROXY and PROXY_FALLBACK:
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True, timeout=PROXY_FALLBACK_TIMEOUT, proxy=PROXY
+                follow_redirects=True,
+                timeout=httpx.Timeout(TIMEOUT, connect=PROXY_FALLBACK_TIMEOUT),
+                proxy=PROXY,
             ) as client:
                 response = await client.get(url, headers=HEADERS)
                 response.raise_for_status()
                 return response, False
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.ProxyError):
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError):
             print(f"proxy did not respond, falling back to a direct request for {url}", file=sys.stderr)
             async with httpx.AsyncClient(follow_redirects=True, timeout=TIMEOUT) as client:
                 response = await client.get(url, headers=HEADERS)

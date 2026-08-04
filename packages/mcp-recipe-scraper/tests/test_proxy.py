@@ -67,10 +67,11 @@ def test_env_flag_false_when_unset(monkeypatch):
 
 
 class _FakeAsyncClient:
-    """Records the proxy it was constructed with and delegates .get() to a callback."""
+    """Records the proxy/timeout it was constructed with and delegates .get() to a callback."""
 
     def __init__(self, get_impl, follow_redirects=True, timeout=None, proxy=None):
         self.proxy = proxy
+        self.timeout = timeout
         self._get_impl = get_impl
 
     async def __aenter__(self):
@@ -119,6 +120,49 @@ def test_fetch_falls_back_on_connect_error(monkeypatch):
     assert used_fallback is True
     assert response.text == "direct ok"
     assert seen_proxies == ["http://proxy:8888", None]
+
+
+def test_fetch_uses_short_connect_timeout_on_proxied_leg(monkeypatch):
+    monkeypatch.setattr(main_mod, "PROXY", "http://proxy:8888")
+    monkeypatch.setattr(main_mod, "PROXY_FALLBACK", True)
+    seen_clients = []
+
+    async def get_impl(proxy, url):
+        raise httpx.ConnectError("boom", request=httpx.Request("GET", url))
+
+    class _CapturingFakeAsyncClient(_FakeAsyncClient):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            seen_clients.append(self)
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _CapturingFakeAsyncClient(get_impl, **kw))
+
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(_fetch("http://example.com"))
+
+    proxied_client, direct_client = seen_clients
+    assert isinstance(proxied_client.timeout, httpx.Timeout)
+    assert proxied_client.timeout.connect == main_mod.PROXY_FALLBACK_TIMEOUT
+    assert proxied_client.timeout.read == main_mod.TIMEOUT
+    assert direct_client.timeout == main_mod.TIMEOUT
+
+
+def test_fetch_does_not_fall_back_on_read_timeout(monkeypatch):
+    monkeypatch.setattr(main_mod, "PROXY", "http://proxy:8888")
+    monkeypatch.setattr(main_mod, "PROXY_FALLBACK", True)
+    call_count = 0
+
+    async def get_impl(proxy, url):
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ReadTimeout("slow target", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(get_impl, **kw))
+
+    with pytest.raises(httpx.ReadTimeout):
+        asyncio.run(_fetch("http://example.com"))
+
+    assert call_count == 1
 
 
 def test_fetch_does_not_fall_back_on_http_status_error(monkeypatch):

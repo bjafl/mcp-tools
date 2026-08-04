@@ -124,6 +124,10 @@ uv --directory packages/mcp-fetch-select run mcp-fetch-select \
   --proxy-url "http://tinyproxy-host:8888" --proxy-username myuser --proxy-password mypass
 ```
 
+Note that `--proxy-password` on the command line is visible to other users via the process table
+(`ps`) and ends up in an MCP client's config JSON — which people often paste into issues or commit
+to dotfiles — so prefer `MCP_PROXY_PASSWORD` over the CLI flag on a shared host.
+
 Or copy the package's `.env.example` to `.env` and run with:
 
 ```bash
@@ -141,10 +145,12 @@ child process by default.
 
 ### Falling back to a direct request
 
+This is opt-in and off by default: without it, a proxy that doesn't respond fails the tool call.
 If the proxy itself doesn't respond (connection refused, DNS failure, or a timeout reaching the
 proxy), set `MCP_PROXY_FALLBACK=1` or pass `--proxy-fallback` to retry the request directly
 instead of failing the tool call. Either the env var or the flag enables it; there's no need to
-set both.
+set both. `MCP_PROXY_FALLBACK` also accepts `true`/`yes`/`on`, case-insensitively, in addition to
+`1`.
 
 ```bash
 uv --directory packages/mcp-fetch-select run mcp-fetch-select --proxy-fallback
