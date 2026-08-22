@@ -22,6 +22,8 @@ app = MCPServer("mcp-steamapi")
 CLIENT: SteamClient | None = None
 
 _SCHEMA_CACHE = TTLCache(ttl_seconds=7 * 24 * 3600)
+_APPLIST_CACHE = TTLCache(ttl_seconds=7 * 24 * 3600)
+_APPLIST_CACHE_KEY = "applist"
 
 
 def _schema_cache_key(appid: int, language: str | None) -> str:
@@ -305,6 +307,93 @@ async def get_player_bans(
         f"**Days since last ban:** {player.get('DaysSinceLastBan', '?')}",
     ]
     return "\n".join(lines)
+
+
+@app.tool(
+    description=(
+        "Search the full Steam catalog by name substring to find an appid. "
+        "First call after a cache miss is slow (the catalog is 200,000+ entries)."
+    )
+)
+async def search_app_by_name(
+    query: Annotated[str, Field(description="Name substring to search for, case-insensitive")],
+    limit: Annotated[int, Field(description="Max matches to return, max 100")] = 10,
+) -> str:
+    limit = min(limit, 100)
+    apps = _APPLIST_CACHE.get(_APPLIST_CACHE_KEY)
+    if apps is None:
+        data = await _client().get_api("ISteamApps/GetAppList/v2", needs_key=False)
+        apps = data.get("applist", {}).get("apps", [])
+        _APPLIST_CACHE.set(_APPLIST_CACHE_KEY, apps)
+
+    query_lower = query.lower()
+    matches = [app for app in apps if query_lower in app.get("name", "").lower()][:limit]
+    if not matches:
+        return f"No apps found matching '{query}'."
+
+    lines = [f"# {len(matches)} match(es) for '{query}' (showing up to {limit})"]
+    for app in matches:
+        lines.append(f"- **{app.get('name')}** — appid `{app.get('appid')}`")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get the current number of players in-game for an app. No API key needed.")
+async def get_current_player_count(
+    appid: Annotated[int, Field(description="Steam appid")],
+) -> str:
+    data = await _client().get_api("ISteamUserStats/GetNumberOfCurrentPlayers/v1", needs_key=False, appid=appid)
+    response = data.get("response", {})
+    if response.get("result") != 1:
+        return f"No current player count available for appid {appid}."
+    return f"Current players for appid {appid}: {response.get('player_count')}"
+
+
+@app.tool(description="Get store metadata for an app (unofficial store API): price, genres, description, etc.")
+async def get_app_details(
+    appid: Annotated[int, Field(description="Steam appid")],
+    country_code: Annotated[str, Field(description="ISO country code for pricing, e.g. 'no', 'us'")] = "no",
+    language: Annotated[str, Field(description="Language for text fields")] = "norwegian",
+) -> str:
+    data = await _client().get_store("/api/appdetails", appids=appid, cc=country_code, l=language)
+    entry = data.get(str(appid), {})
+    if not entry.get("success"):
+        return f"No store details found for appid {appid}."
+
+    app_data = entry.get("data", {})
+    lines = [
+        f"# {app_data.get('name', '(unknown)')}",
+        f"**Type:** {app_data.get('type', '?')}",
+        f"**Free:** {app_data.get('is_free', False)}",
+    ]
+    price = app_data.get("price_overview")
+    if price:
+        lines.append(
+            f"**Price:** {price.get('final', 0) / 100} {price.get('currency', '')} "
+            f"({price.get('discount_percent', 0)}% off)"
+        )
+    genres = ", ".join(g.get("description", "") for g in app_data.get("genres", []))
+    if genres:
+        lines.append(f"**Genres:** {genres}")
+    lines += ["", "## Details", "```json", json.dumps(app_data, indent=2, ensure_ascii=False), "```"]
+    return "\n".join(lines)
+
+
+@app.tool(description="Get review summary for an app (unofficial store API).")
+async def get_app_reviews(
+    appid: Annotated[int, Field(description="Steam appid")],
+) -> str:
+    data = await _client().get_store(f"/appreviews/{appid}", json=1, language="all", purchase_type="all")
+    summary = data.get("query_summary", {})
+    if not summary:
+        return f"No review summary found for appid {appid}."
+
+    return (
+        f"# Reviews for appid {appid}\n"
+        f"**Score:** {summary.get('review_score_desc', '?')}\n"
+        f"**Positive:** {summary.get('total_positive', 0)}\n"
+        f"**Negative:** {summary.get('total_negative', 0)}\n"
+        f"**Total:** {summary.get('total_reviews', 0)}"
+    )
 
 
 def main() -> None:
