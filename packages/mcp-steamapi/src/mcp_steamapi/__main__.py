@@ -7,12 +7,25 @@ from typing import Annotated
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
+from mcp_steamapi.cache import TTLCache
 from mcp_steamapi.client import SteamClient
-from mcp_steamapi.normalize import is_empty_owned_games_response, is_valid_steamid64, minutes_to_hours, visibility_label
+from mcp_steamapi.normalize import (
+    is_empty_owned_games_response,
+    is_valid_steamid64,
+    minutes_to_hours,
+    player_achievements_error,
+    visibility_label,
+)
 
 app = MCPServer("mcp-steamapi")
 
 CLIENT: SteamClient | None = None
+
+_SCHEMA_CACHE = TTLCache(ttl_seconds=7 * 24 * 3600)
+
+
+def _schema_cache_key(appid: int, language: str | None) -> str:
+    return f"{appid}:{language or ''}"
 
 
 def _resolve_api_key() -> str:
@@ -117,6 +130,71 @@ async def get_recently_played_games(
     for game in games:
         hours_2w = minutes_to_hours(game.get("playtime_2weeks", 0))
         lines.append(f"- **{game.get('name', '(unknown)')}** — appid `{game.get('appid')}`, {hours_2w}h in last 2 weeks")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get all achievements available for a game (cached). Returns empty if the game has no achievements.")
+async def get_game_achievements_schema(
+    appid: Annotated[int, Field(description="Steam appid")],
+    language: Annotated[str | None, Field(description="Language for displayName/description, e.g. 'norwegian'")] = None,
+) -> str:
+    cache_key = _schema_cache_key(appid, language)
+    data = _SCHEMA_CACHE.get(cache_key)
+    if data is None:
+        data = await _client().get_api("ISteamUserStats/GetSchemaForGame/v2", appid=appid, l=language)
+        _SCHEMA_CACHE.set(cache_key, data)
+
+    game = data.get("game", {})
+    achievements = game.get("availableGameStats", {}).get("achievements", [])
+    if not achievements:
+        return f"No achievements found for appid {appid} (this game may not have achievements)."
+
+    lines = [f"# {len(achievements)} achievement(s) for {game.get('gameName', appid)} (appid {appid})"]
+    for ach in achievements:
+        hidden = " (hidden)" if ach.get("hidden") else ""
+        lines.append(f"- `{ach['name']}` — **{ach.get('displayName', ach['name'])}**{hidden}: {ach.get('description', '')}")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get a player's unlocked/locked achievements for a game.")
+async def get_player_achievements(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+    appid: Annotated[int, Field(description="Steam appid")],
+    language: Annotated[str | None, Field(description="Language for name/description, e.g. 'norwegian'")] = None,
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("ISteamUserStats/GetPlayerAchievements/v1", steamid=steamid, appid=appid, l=language)
+
+    error = player_achievements_error(data)
+    if error:
+        return f"{error} (steamid {steamid}, appid {appid})"
+
+    achievements = data.get("playerstats", {}).get("achievements", [])
+    unlocked = [a for a in achievements if a.get("achieved") == 1]
+    lines = [f"# {len(unlocked)}/{len(achievements)} achievement(s) unlocked for appid {appid}"]
+    for ach in achievements:
+        status = "unlocked" if ach.get("achieved") == 1 else "locked"
+        unlock_note = f" (unlocked {ach['unlocktime']})" if ach.get("achieved") == 1 and ach.get("unlocktime") else ""
+        lines.append(f"- [{status}] `{ach['apiname']}` — {ach.get('name', ach['apiname'])}{unlock_note}")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get global unlock percentages (rarity) for a game's achievements. No API key needed.")
+async def get_global_achievement_percentages(
+    appid: Annotated[int, Field(description="Steam appid")],
+) -> str:
+    data = await _client().get_api(
+        "ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2", needs_key=False, gameid=appid
+    )
+    achievements = data.get("achievementpercentages", {}).get("achievements", [])
+    if not achievements:
+        return f"No global achievement percentages found for appid {appid}."
+
+    lines = [f"# Global achievement rarity for appid {appid}"]
+    for ach in achievements:
+        lines.append(f"- `{ach['name']}` — {round(ach['percent'], 1)}%")
     return "\n".join(lines)
 
 
