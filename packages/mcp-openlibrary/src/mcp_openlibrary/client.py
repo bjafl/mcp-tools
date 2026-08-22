@@ -1,4 +1,4 @@
-import time
+import asyncio
 
 import httpx
 
@@ -24,12 +24,12 @@ class OpenLibraryClient:
         """GET path (relative to BASE_URL). Returns None on 404 or a {"error": "notfound"} body."""
         query = {k: v for k, v in params.items() if v is not None}
         for attempt in range(MAX_ATTEMPTS):
-            self._bucket.acquire()
+            await self._bucket.acquire()
             response = await self._http.get(path, params=query or None)
             if response.status_code in RETRY_STATUS_CODES:
                 if attempt == MAX_ATTEMPTS - 1:
                     response.raise_for_status()
-                time.sleep(2**attempt)
+                await asyncio.sleep(2**attempt)
                 continue
             if response.status_code == 404:
                 return None

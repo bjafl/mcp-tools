@@ -40,9 +40,12 @@ def _make_client(monkeypatch, get_impl, rate_per_sec=1000.0):
         fake.headers = kw.get("headers")
         return fake
 
+    async def no_sleep(seconds):
+        return None
+
     monkeypatch.setattr(httpx, "AsyncClient", fake_async_client)
-    monkeypatch.setattr(ratelimit_mod.time, "sleep", lambda s: None)
-    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ratelimit_mod.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(client_mod.asyncio, "sleep", no_sleep)
     return OpenLibraryClient(user_agent="test-agent", rate_per_sec=rate_per_sec), fake
 
 
