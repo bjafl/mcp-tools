@@ -1,10 +1,15 @@
 # packages/mcp-openlibrary/src/mcp_openlibrary/__main__.py
 import argparse
+import json
 import os
+import re
+from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
 from mcp_openlibrary.client import OpenLibraryClient
+from mcp_openlibrary.normalize import author_refs, cover_url, olid_kind, strip_missing_covers, unwrap
 
 app = MCPServer("mcp-openlibrary")
 
@@ -12,12 +17,153 @@ DEFAULT_USER_AGENT = "mcp-openlibrary/0.1.0 (+https://github.com/bjafl/mcp-tools
 
 CLIENT: OpenLibraryClient | None = None
 
+DEFAULT_SEARCH_FIELDS = (
+    "key,title,subtitle,author_key,author_name,first_publish_year,"
+    "publish_year,publisher,language,edition_count,edition_key,isbn,"
+    "cover_i,cover_edition_key,subject,ebook_access,has_fulltext,ia,"
+    "ratings_average,ratings_count,number_of_pages_median,lcc,ddc"
+)
+
+_ISBN_RE = re.compile(r"^[0-9Xx-]{10,17}$")
+
+
+def _not_found(kind: str, identifier: str) -> str:
+    return f"No {kind} found for '{identifier}'."
+
+
+def _is_isbn(identifier: str) -> bool:
+    digits = identifier.replace("-", "")
+    return bool(_ISBN_RE.match(identifier)) and len(digits) in (10, 13)
+
 
 def _resolve_user_agent(cli_value: str | None) -> str:
     """CLI value wins; else OPENLIBRARY_USER_AGENT env var; else the default."""
     if cli_value is not None:
         return cli_value
     return os.environ.get("OPENLIBRARY_USER_AGENT", DEFAULT_USER_AGENT)
+
+
+@app.tool(description="Search Open Library for books by title, author, subject, or a Solr query.")
+async def search_books(
+    query: Annotated[str, Field(description="Search query, e.g. 'tolkien' or 'title:hobbit AND author_name:tolkien'")],
+    fields: Annotated[
+        str | None,
+        Field(description="Comma-separated fields to return. Defaults to a curated set; avoid '*' (expensive)."),
+    ] = None,
+    sort: Annotated[str | None, Field(description="Sort order, e.g. 'rating desc', 'new'. Default: relevance")] = None,
+    limit: Annotated[int, Field(description="Results per page, max 100")] = 10,
+    page: Annotated[int, Field(description="1-indexed page number")] = 1,
+) -> str:
+    limit = min(limit, 100)
+    data = await CLIENT.get_json(
+        "/search.json",
+        q=query,
+        fields=fields or DEFAULT_SEARCH_FIELDS,
+        sort=sort,
+        limit=limit,
+        page=page,
+    )
+    docs = (data or {}).get("docs", [])
+    if not docs:
+        return f"No books found for query '{query}'."
+
+    total = data.get("numFound", len(docs))
+    lines = [f"# {total} result(s) for '{query}' (showing {len(docs)}, page {page})"]
+    for doc in docs:
+        title = doc.get("title", "(untitled)")
+        authors = ", ".join(doc.get("author_name", []) or []) or "unknown author"
+        year = doc.get("first_publish_year", "?")
+        key = doc.get("key", "")
+        lines.append(f"- **{title}** by {authors} ({year}) — `{key}`")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get details for a single Open Library work by its OLID (e.g. 'OL45804W').")
+async def get_work(
+    olid: Annotated[str, Field(description="Work OLID, e.g. 'OL45804W'")],
+) -> str:
+    if olid_kind(olid) != "work":
+        return f"'{olid}' is not a valid work OLID (expected a pattern like 'OL45804W')."
+
+    data = await CLIENT.get_json(f"/works/{olid}.json")
+    if data is None:
+        return _not_found("work", olid)
+
+    summary = {
+        "olid": olid,
+        "title": data.get("title"),
+        "description": unwrap(data.get("description")),
+        "authors": author_refs(data.get("authors", [])),
+        "subjects": data.get("subjects", []),
+        "subject_people": data.get("subject_people", []),
+        "subject_places": data.get("subject_places", []),
+        "subject_times": data.get("subject_times", []),
+        "covers": strip_missing_covers(data.get("covers", [])),
+    }
+    lines = [f"# {summary['title'] or '(untitled)'}", f"**OLID:** {olid}"]
+    if summary["authors"]:
+        lines.append(f"**Authors:** {', '.join(summary['authors'])}")
+    if summary["description"]:
+        lines += ["", summary["description"]]
+    lines += ["", "## Details", "```json", json.dumps(summary, indent=2, ensure_ascii=False), "```"]
+    return "\n".join(lines)
+
+
+@app.tool(description="Get details for a book edition by its OLID (e.g. 'OL7353617M') or ISBN-10/13.")
+async def get_edition(
+    identifier: Annotated[str, Field(description="Edition OLID (e.g. 'OL7353617M') or ISBN-10/13")],
+) -> str:
+    kind = olid_kind(identifier)
+    if kind == "edition":
+        path = f"/books/{identifier}.json"
+    elif kind is None and _is_isbn(identifier):
+        path = f"/isbn/{identifier}.json"
+    else:
+        return f"'{identifier}' is not a valid edition OLID or ISBN."
+
+    data = await CLIENT.get_json(path)
+    if data is None:
+        return _not_found("edition", identifier)
+
+    summary = {
+        "key": data.get("key"),
+        "title": data.get("title"),
+        "authors": author_refs(data.get("authors", [])),
+        "isbn_10": data.get("isbn_10", []),
+        "isbn_13": data.get("isbn_13", []),
+        "publishers": data.get("publishers", []),
+        "publish_date": data.get("publish_date"),
+        "number_of_pages": data.get("number_of_pages"),
+        "languages": [lang.get("key", "").rsplit("/", 1)[-1] for lang in data.get("languages", [])],
+        "first_sentence": unwrap(data.get("first_sentence")),
+        "covers": strip_missing_covers(data.get("covers", [])),
+        "works": [w.get("key") for w in data.get("works", [])],
+    }
+    lines = [f"# {summary['title'] or '(untitled)'}", f"**Key:** {summary['key']}"]
+    if summary["authors"]:
+        lines.append(f"**Authors:** {', '.join(summary['authors'])}")
+    if summary["publish_date"]:
+        lines.append(f"**Published:** {summary['publish_date']}")
+    lines += ["", "## Details", "```json", json.dumps(summary, indent=2, ensure_ascii=False), "```"]
+    return "\n".join(lines)
+
+
+@app.tool(
+    description=(
+        "Build a cover image URL from a cover ID/OLID/ISBN/OCLC/LCCN identifier. "
+        "Makes no network request."
+    )
+)
+async def get_cover_url(
+    id_type: Annotated[str, Field(description="One of: id, olid, isbn, oclc, lccn (book) or id, olid (author)")],
+    id_value: Annotated[str, Field(description="The identifier value, e.g. a cover ID, OLID, or ISBN")],
+    size: Annotated[str, Field(description="S, M, or L")] = "M",
+    kind: Annotated[str, Field(description="'book' or 'author'")] = "book",
+) -> str:
+    try:
+        return cover_url(id_type, id_value, size, kind=kind)
+    except ValueError as exc:
+        return str(exc)
 
 
 def main() -> None:
