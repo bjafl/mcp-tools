@@ -198,6 +198,115 @@ async def get_global_achievement_percentages(
     return "\n".join(lines)
 
 
+@app.tool(
+    description=(
+        "Get a player's numeric stats for a game (e.g. progression counters). Achievements here "
+        "lack unlocktime — prefer get_player_achievements for achievement status."
+    )
+)
+async def get_user_stats_for_game(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+    appid: Annotated[int, Field(description="Steam appid")],
+    language: Annotated[str | None, Field(description="Language, e.g. 'norwegian'")] = None,
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("ISteamUserStats/GetUserStatsForGame/v2", steamid=steamid, appid=appid, l=language)
+    stats = data.get("playerstats", {}).get("stats", [])
+    if not stats:
+        return f"No stats found for steamid {steamid}, appid {appid}."
+
+    lines = [f"# {len(stats)} stat(s) for appid {appid}"]
+    for stat in stats:
+        lines.append(f"- `{stat.get('name')}`: {stat.get('value')}")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get a player's Steam level.")
+async def get_steam_level(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("IPlayerService/GetSteamLevel/v1", steamid=steamid)
+    level = data.get("response", {}).get("player_level")
+    if level is None:
+        return f"No Steam level found for '{steamid}'."
+    return f"Steam level for {steamid}: {level}"
+
+
+@app.tool(description="Get a player's badges and XP progress.")
+async def get_badges(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("IPlayerService/GetBadges/v1", steamid=steamid)
+    response = data.get("response", {})
+    badges = response.get("badges", [])
+    lines = [
+        f"# Badges for {steamid}",
+        f"**Level:** {response.get('player_level', '?')}, **XP:** {response.get('player_xp', '?')}",
+        "",
+    ]
+    if not badges:
+        lines.append("No badges found.")
+    for badge in badges:
+        appid_note = f", appid {badge['appid']}" if badge.get("appid") else ""
+        lines.append(f"- Badge `{badge.get('badgeid')}` level {badge.get('level')}{appid_note}")
+    return "\n".join(lines)
+
+
+@app.tool(
+    description=(
+        "Get a player's friend list. Warning: comparing achievements across friends multiplies "
+        "call volume by friends x games — this tool returns the raw list only, no batch comparison."
+    )
+)
+async def get_friend_list(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("ISteamUser/GetFriendList/v1", steamid=steamid, relationship="friend")
+    friends = data.get("friendslist", {}).get("friends", [])
+    if not friends:
+        return f"No public friend list found for '{steamid}'."
+
+    lines = [f"# {len(friends)} friend(s) for {steamid}"]
+    for friend in friends:
+        lines.append(f"- `{friend.get('steamid')}` — friends since {friend.get('friend_since')}")
+    return "\n".join(lines)
+
+
+@app.tool(description="Get a player's VAC/game/community ban status.")
+async def get_player_bans(
+    steamid: Annotated[str, Field(description="SteamID64, 17-digit numeric string")],
+) -> str:
+    if not is_valid_steamid64(steamid):
+        return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
+
+    data = await _client().get_api("ISteamUser/GetPlayerBans/v1", steamids=steamid)
+    players = data.get("players", [])
+    if not players:
+        return f"No ban information found for '{steamid}'."
+
+    player = players[0]
+    lines = [
+        f"# Ban status for {steamid}",
+        f"**VAC banned:** {player.get('VACBanned')} ({player.get('NumberOfVACBans', 0)} bans)",
+        f"**Game banned:** {player.get('NumberOfGameBans', 0)} ban(s)",
+        f"**Community banned:** {player.get('CommunityBanned')}",
+        f"**Economy ban:** {player.get('EconomyBan')}",
+        f"**Days since last ban:** {player.get('DaysSinceLastBan', '?')}",
+    ]
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="mcp-steamapi")
     parser.add_argument(
