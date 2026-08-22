@@ -100,8 +100,9 @@ beyond localhost.
 
 ## Proxying outbound requests
 
-Both servers make outbound HTTP requests (to fetch the target page). To route those through a
-web proxy — e.g. a [tinyproxy](https://tinyproxy.github.io/) instance — set:
+`mcp-fetch-select` and `mcp-recipe-scraper` make outbound HTTP requests (to fetch the target
+page) and support routing those through a web proxy — e.g. a
+[tinyproxy](https://tinyproxy.github.io/) instance. To do so, set:
 
 | Env var | CLI flag | Purpose |
 |---|---|---|
@@ -144,6 +145,9 @@ examples above), these variables must be listed in that client's `env` config, s
 clients only forward a small safe-list of variables (not the whole parent environment) to the
 child process by default.
 
+`mcp-openlibrary` does not support proxying — its requests to Open Library always go out
+directly, and none of the variables or flags in this section have any effect on it.
+
 ### Falling back to a direct request
 
 This is opt-in and off by default: without it, a proxy that doesn't respond fails the tool call.
@@ -177,7 +181,7 @@ proxy.
 
 The root `pyproject.toml` declares a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/)
 (`[tool.uv.workspace]`) spanning `packages/*`, which is what lets `uv sync`/`uv run` at the repo
-root manage both packages together. Each package's own `pyproject.toml` is still a complete,
+root manage all three packages together. Each package's own `pyproject.toml` is still a complete,
 independent project — its dependencies don't reference the workspace — so `uvx --from
 git+...#subdirectory=packages/<name>` keeps working standalone, without needing the rest of the
 repo or the root `pyproject.toml`.

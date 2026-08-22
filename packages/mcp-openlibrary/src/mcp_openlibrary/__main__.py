@@ -43,6 +43,18 @@ def _resolve_user_agent(cli_value: str | None) -> str:
     return os.environ.get("OPENLIBRARY_USER_AGENT", DEFAULT_USER_AGENT)
 
 
+def _client() -> OpenLibraryClient:
+    """Return the shared client, creating a default one if main() never ran.
+
+    Entry points that import `app` without going through main() (e.g. `mcp dev` /
+    `mcp run`) would otherwise leave CLIENT as None and crash every tool.
+    """
+    global CLIENT
+    if CLIENT is None:
+        CLIENT = OpenLibraryClient(user_agent=_resolve_user_agent(None))
+    return CLIENT
+
+
 @app.tool(description="Search Open Library for books by title, author, subject, or a Solr query.")
 async def search_books(
     query: Annotated[str, Field(description="Search query, e.g. 'tolkien' or 'title:hobbit AND author_name:tolkien'")],
@@ -55,7 +67,7 @@ async def search_books(
     page: Annotated[int, Field(description="1-indexed page number")] = 1,
 ) -> str:
     limit = min(limit, 100)
-    data = await CLIENT.get_json(
+    data = await _client().get_json(
         "/search.json",
         q=query,
         fields=fields or DEFAULT_SEARCH_FIELDS,
@@ -85,7 +97,7 @@ async def get_work(
     if olid_kind(olid) != "work":
         return f"'{olid}' is not a valid work OLID (expected a pattern like 'OL45804W')."
 
-    data = await CLIENT.get_json(f"/works/{olid}.json")
+    data = await _client().get_json(f"/works/{olid}.json")
     if data is None:
         return _not_found("work", olid)
 
@@ -121,7 +133,7 @@ async def get_edition(
     else:
         return f"'{identifier}' is not a valid edition OLID or ISBN."
 
-    data = await CLIENT.get_json(path)
+    data = await _client().get_json(path)
     if data is None:
         return _not_found("edition", identifier)
 
@@ -172,7 +184,7 @@ async def search_authors(
     limit: Annotated[int, Field(description="Results to return, max 100")] = 10,
 ) -> str:
     limit = min(limit, 100)
-    data = await CLIENT.get_json("/search/authors.json", q=query, limit=limit)
+    data = await _client().get_json("/search/authors.json", q=query, limit=limit)
     docs = (data or {}).get("docs", [])
     if not docs:
         return f"No authors found for query '{query}'."
@@ -194,7 +206,7 @@ async def get_author(
     if olid_kind(olid) != "author":
         return f"'{olid}' is not a valid author OLID (expected a pattern like 'OL23919A')."
 
-    data = await CLIENT.get_json(f"/authors/{olid}.json")
+    data = await _client().get_json(f"/authors/{olid}.json")
     if data is None:
         return _not_found("author", olid)
 
@@ -227,7 +239,7 @@ async def get_author_works(
         return f"'{olid}' is not a valid author OLID (expected a pattern like 'OL23919A')."
 
     limit = min(limit, 100)
-    data = await CLIENT.get_json(f"/authors/{olid}/works.json", limit=limit, offset=offset)
+    data = await _client().get_json(f"/authors/{olid}/works.json", limit=limit, offset=offset)
     if data is None:
         return _not_found("author", olid)
 
@@ -250,13 +262,21 @@ async def get_author_works(
 @app.tool(description="Search/browse Open Library by subject, e.g. 'science fiction' or 'love'.")
 async def search_subjects(
     subject: Annotated[str, Field(description="Subject name, e.g. 'science fiction' (auto-slugified)")],
-    details: Annotated[bool, Field(description="Include extra facet data (authors, publishers, publishing_history)")] = False,
+    details: Annotated[
+        bool,
+        Field(
+            description=(
+                "Request extra facet data from the API (authors, publishers, publishing_history) — "
+                "currently fetched but not included in this tool's summary output; reserved for future use."
+            )
+        ),
+    ] = False,
     limit: Annotated[int, Field(description="Works to return, max 100")] = 10,
     offset: Annotated[int, Field(description="Pagination offset")] = 0,
 ) -> str:
     limit = min(limit, 100)
     slug = subject_slug(subject)
-    data = await CLIENT.get_json(
+    data = await _client().get_json(
         f"/subjects/{slug}.json",
         details="true" if details else None,
         limit=limit,
