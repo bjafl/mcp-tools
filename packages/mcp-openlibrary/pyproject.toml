@@ -1,0 +1,23 @@
+[project]
+name = "mcp-openlibrary"
+version = "0.1.0"
+description = "MCP server for the Open Library API (search, works, editions, authors, subjects, covers)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=2.0.0,<3",
+    "httpx>=0.27,<0.29",
+    "pydantic>=2,<3",
+]
+
+[project.scripts]
+mcp-openlibrary = "mcp_openlibrary:main"
+
+[build-system]
+requires = ["uv_build>=0.11.13,<0.12"]
+build-backend = "uv_build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_openlibrary"]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]

@@ -13,6 +13,7 @@ A monorepo of MCP (Model Context Protocol) tools, each runnable directly via `uv
 |---|---|
 | [mcp-fetch-select](packages/mcp-fetch-select/) | Fetch a URL and return elements matching a CSS selector |
 | [mcp-recipe-scraper](packages/mcp-recipe-scraper/) | Scrape structured recipe data (title, ingredients, instructions, nutrients, yields) from a recipe URL |
+| [mcp-openlibrary](packages/mcp-openlibrary/) | Search books, works, editions, authors, and subjects via the Open Library API |
 
 ---
 
