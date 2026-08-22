@@ -4,13 +4,14 @@ version = "0.1.0"
 description = "MCP server collection"
 requires-python = ">=3.12"
 dependencies = [
-  "mcp-fetch-select", "mcp-recipe-scraper", "mcp-openlibrary",
+  "mcp-fetch-select", "mcp-recipe-scraper", "mcp-openlibrary", "mcp-steamapi",
 ]
 
 [tool.uv.sources]
 mcp-fetch-select = { workspace = true }
 mcp-recipe-scraper = { workspace = true }
 mcp-openlibrary = { workspace = true }
+mcp-steamapi = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/*"]
