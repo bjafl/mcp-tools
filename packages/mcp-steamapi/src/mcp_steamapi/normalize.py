@@ -1,6 +1,6 @@
 def is_valid_steamid64(steamid: str) -> bool:
     """SteamID64 is a 17-digit decimal string."""
-    return steamid.isdigit() and len(steamid) == 17
+    return steamid.isascii() and steamid.isdigit() and len(steamid) == 17
 
 
 def steam_icon_url(appid: int, img_icon_url: str) -> str:

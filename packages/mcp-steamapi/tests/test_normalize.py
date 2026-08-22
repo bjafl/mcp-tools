@@ -19,6 +19,7 @@ from mcp_steamapi.normalize import (
         ("765611979602657289", False),
         ("abc", False),
         ("", False),
+        ("7656119796026572²", False),  # 17 chars with non-ASCII digit ²
     ],
 )
 def test_is_valid_steamid64(steamid, expected):
