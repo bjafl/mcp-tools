@@ -57,7 +57,8 @@ class SteamClient:
 
             if "application/json" not in content_type:
                 raise SteamAPIError(
-                    f"Steam API returned non-JSON content ({content_type or 'unknown'})",
+                    f"Steam API returned non-JSON content ({content_type or 'unknown'}) "
+                    f"[HTTP {response.status_code}]",
                     response.status_code,
                 )
 

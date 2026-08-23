@@ -104,6 +104,20 @@ def test_get_api_raises_on_403_html_body(monkeypatch):
     assert "STEAM_API_KEY" in str(exc_info.value)
 
 
+def test_get_api_non_json_error_message_includes_status_code(monkeypatch):
+    async def get_impl(url, params):
+        return _FakeResponse(401, content_type="text/html")
+
+    client, fake = _make_client(monkeypatch, get_impl)
+
+    with pytest.raises(SteamAPIError) as exc_info:
+        asyncio.run(client.get_api("ISteamUser/GetFriendList/v1", steamid="123"))
+
+    assert exc_info.value.status_code == 401
+    assert "401" in str(exc_info.value)
+    assert "text/html" in str(exc_info.value)
+
+
 def test_get_api_passes_through_403_json_body(monkeypatch):
     async def get_impl(url, params):
         return _FakeResponse(403, {"playerstats": {"error": "Profile is not public", "success": False}})
