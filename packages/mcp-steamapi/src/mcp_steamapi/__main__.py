@@ -13,7 +13,9 @@ from mcp_steamapi.normalize import (
     is_empty_owned_games_response,
     is_valid_steamid64,
     minutes_to_hours,
+    persona_state_label,
     player_achievements_error,
+    steam_icon_url,
     visibility_label,
 )
 
@@ -75,6 +77,7 @@ async def get_player_summary(
         f"# {player.get('personaname', '(unknown)')}",
         f"**SteamID64:** {steamid}",
         f"**Profile visibility:** {visibility}",
+        f"**Status:** {persona_state_label(player.get('personastate', 0))}",
         f"**Profile URL:** {player.get('profileurl', '')}",
     ]
     if visibility != "public":
@@ -111,7 +114,13 @@ async def get_owned_games(
     for game in games:
         hours = minutes_to_hours(game.get("playtime_forever", 0))
         stats_hint = " (has stats/achievements)" if game.get("has_community_visible_stats") else ""
-        lines.append(f"- **{game.get('name', '(unknown)')}** — appid `{game.get('appid')}`, {hours}h played{stats_hint}")
+        icon_hint = ""
+        if game.get("img_icon_url"):
+            icon_hint = f", icon: {steam_icon_url(game.get('appid'), game['img_icon_url'])}"
+        lines.append(
+            f"- **{game.get('name', '(unknown)')}** — appid `{game.get('appid')}`, "
+            f"{hours}h played{stats_hint}{icon_hint}"
+        )
     return "\n".join(lines)
 
 
@@ -215,6 +224,11 @@ async def get_user_stats_for_game(
         return f"'{steamid}' is not a valid SteamID64 (expected a 17-digit numeric string)."
 
     data = await _client().get_api("ISteamUserStats/GetUserStatsForGame/v2", steamid=steamid, appid=appid, l=language)
+
+    error = player_achievements_error(data)
+    if error:
+        return f"{error} (steamid {steamid}, appid {appid})"
+
     stats = data.get("playerstats", {}).get("stats", [])
     if not stats:
         return f"No stats found for steamid {steamid}, appid {appid}."
@@ -360,21 +374,34 @@ async def get_app_details(
         return f"No store details found for appid {appid}."
 
     app_data = entry.get("data", {})
+    summary = {
+        "name": app_data.get("name"),
+        "type": app_data.get("type"),
+        "is_free": app_data.get("is_free", False),
+        "price_overview": app_data.get("price_overview"),
+        "genres": [g.get("description", "") for g in app_data.get("genres", [])],
+        "categories": [c.get("description", "") for c in app_data.get("categories", [])],
+        "release_date": app_data.get("release_date"),
+        "short_description": app_data.get("short_description"),
+        "developers": app_data.get("developers", []),
+        "publishers": app_data.get("publishers", []),
+        "metacritic": app_data.get("metacritic"),
+    }
     lines = [
-        f"# {app_data.get('name', '(unknown)')}",
-        f"**Type:** {app_data.get('type', '?')}",
-        f"**Free:** {app_data.get('is_free', False)}",
+        f"# {summary['name'] or '(unknown)'}",
+        f"**Type:** {summary['type'] or '?'}",
+        f"**Free:** {summary['is_free']}",
     ]
-    price = app_data.get("price_overview")
+    price = summary["price_overview"]
     if price:
         lines.append(
             f"**Price:** {price.get('final', 0) / 100} {price.get('currency', '')} "
             f"({price.get('discount_percent', 0)}% off)"
         )
-    genres = ", ".join(g.get("description", "") for g in app_data.get("genres", []))
+    genres = ", ".join(summary["genres"])
     if genres:
         lines.append(f"**Genres:** {genres}")
-    lines += ["", "## Details", "```json", json.dumps(app_data, indent=2, ensure_ascii=False), "```"]
+    lines += ["", "## Details", "```json", json.dumps(summary, indent=2, ensure_ascii=False), "```"]
     return "\n".join(lines)
 
 

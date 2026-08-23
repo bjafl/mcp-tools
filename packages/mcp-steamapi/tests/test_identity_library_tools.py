@@ -40,6 +40,7 @@ def test_get_player_summary_returns_visibility(monkeypatch):
                         "steamid": "76561197960265728",
                         "personaname": "Gaben",
                         "communityvisibilitystate": 3,
+                        "personastate": 1,
                         "profileurl": "https://x",
                     }
                 ]
@@ -52,6 +53,29 @@ def test_get_player_summary_returns_visibility(monkeypatch):
 
     assert "Gaben" in result
     assert "public" in result
+    assert "**Status:** Online" in result
+
+
+def test_get_player_summary_labels_persona_state(monkeypatch):
+    fake = _FakeClient(
+        {
+            "response": {
+                "players": [
+                    {
+                        "steamid": "76561197960265728",
+                        "personaname": "Away Guy",
+                        "communityvisibilitystate": 3,
+                        "personastate": 3,
+                    }
+                ]
+            }
+        }
+    )
+    monkeypatch.setattr(main_mod, "CLIENT", fake)
+
+    result = asyncio.run(main_mod.get_player_summary(steamid="76561197960265728"))
+
+    assert "**Status:** Away" in result
 
 
 def test_get_player_summary_flags_private_visibility(monkeypatch):
@@ -97,7 +121,13 @@ def test_get_owned_games_lists_games(monkeypatch):
             "response": {
                 "game_count": 1,
                 "games": [
-                    {"appid": 620, "name": "Portal 2", "playtime_forever": 1843, "has_community_visible_stats": True}
+                    {
+                        "appid": 620,
+                        "name": "Portal 2",
+                        "playtime_forever": 1843,
+                        "has_community_visible_stats": True,
+                        "img_icon_url": "abc123",
+                    }
                 ],
             }
         }
@@ -109,7 +139,20 @@ def test_get_owned_games_lists_games(monkeypatch):
     assert "Portal 2" in result
     assert "620" in result
     assert "has stats/achievements" in result
+    assert "https://media.steampowered.com/steamcommunity/public/images/apps/620/abc123.jpg" in result
     assert fake.calls[0][1]["include_appinfo"] == 1
+
+
+def test_get_owned_games_omits_icon_when_missing(monkeypatch):
+    fake = _FakeClient(
+        {"response": {"game_count": 1, "games": [{"appid": 620, "name": "Portal 2", "playtime_forever": 60}]}}
+    )
+    monkeypatch.setattr(main_mod, "CLIENT", fake)
+
+    result = asyncio.run(main_mod.get_owned_games(steamid="76561197960265728"))
+
+    assert "Portal 2" in result
+    assert "icon:" not in result
 
 
 def test_get_owned_games_private_response(monkeypatch):

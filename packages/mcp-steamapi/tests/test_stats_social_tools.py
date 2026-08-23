@@ -32,6 +32,16 @@ def test_get_user_stats_for_game_no_stats(monkeypatch):
     assert "No stats found" in result
 
 
+def test_get_user_stats_for_game_private_profile(monkeypatch):
+    fake = _FakeClient({"playerstats": {"error": "Profile is not public", "success": False}})
+    monkeypatch.setattr(main_mod, "CLIENT", fake)
+
+    result = asyncio.run(main_mod.get_user_stats_for_game(steamid="76561197960265728", appid=620))
+
+    assert "Profile is not public" in result
+    assert "No stats found" not in result
+
+
 def test_get_steam_level_returns_level(monkeypatch):
     fake = _FakeClient({"response": {"player_level": 42}})
     monkeypatch.setattr(main_mod, "CLIENT", fake)
