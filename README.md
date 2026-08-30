@@ -15,6 +15,7 @@ A monorepo of MCP (Model Context Protocol) tools, each runnable directly via `uv
 | [mcp-recipe-scraper](packages/mcp-recipe-scraper/) | Scrape structured recipe data (title, ingredients, instructions, nutrients, yields) from a recipe URL |
 | [mcp-openlibrary](packages/mcp-openlibrary/) | Search books, works, editions, authors, and subjects via the Open Library API |
 | [mcp-steamapi](packages/mcp-steamapi/) | Steam Web API: achievements, library/playtime, profile/social, store metadata |
+| [mcp-backblaze](packages/mcp-backblaze/) | Backblaze B2 Cloud Storage: buckets, file listing, upload/download/delete |
 
 ---
 
